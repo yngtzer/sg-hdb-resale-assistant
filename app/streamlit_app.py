@@ -11,8 +11,18 @@ from tools.formatting import fmt_money, fmt_psf
 from tools.grants_prompt import build_grants_prompt
 from tools.eip_spr_prompt import build_eip_spr_prompt
 from tools.block_checklist import build_block_checklist
+import os, pathlib, time
 
 st.set_page_config(page_title="SG HDB Resale Assistant", layout="wide")
+st.title("🇸🇬 SG HDB Resale Assistant")
+
+# Data freshness (DuckDB)
+db_path = pathlib.Path("db/resale.duckdb")
+if db_path.exists():
+    age_hours = (time.time() - db_path.stat().st_mtime)/3600
+    st.caption(f"Data: Resale transactions loaded • updated ~{age_hours:.1f}h ago")
+else:
+    st.caption("Data: (no DB yet) — run `python db/init_duckdb.py`")
 
 @st.cache_resource
 def get_retriever():
@@ -299,3 +309,6 @@ if question:
         for i, c in enumerate(ans["citations"], 1):
             st.markdown(f"- [{i}] {c['title']} — {c['url']}")
 
+
+st.write("")
+st.caption("This app uses only public information (HDB/CPF/MAS/CEA/data.gov.sg). Always verify on the official pages before acting.")
