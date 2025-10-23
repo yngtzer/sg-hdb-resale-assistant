@@ -1,0 +1,18 @@
+msr_cap: 0.30           # Mortgage Servicing Ratio cap (fraction of gross monthly income)
+default_interest_pa: 3.0 # % p.a. used if user doesn't change sidebar input
+max_tenure_years: 30
+
+# Buyer’s Stamp Duty (BSD) tiers (residential) — update if policy changes
+bsd_tiers:
+  - { up_to: 180000,   rate: 0.01 }
+  - { up_to: 360000,   rate: 0.02 }   # next 180k
+  - { up_to: 1000000,  rate: 0.03 }   # next 640k
+  - { up_to: 1500000,  rate: 0.04 }   # next 500k
+  - { up_to: 3000000,  rate: 0.05 }   # next 1.5m
+  - { up_to: null,     rate: 0.06 }   # above 3m
+
+# Placeholders — these vary by deal, solicitor, etc. Keep as hints.
+placeholders:
+  option_fee_sgd: 1000
+  exercise_fee_sgd: 4000
+  legal_misc_sgd: 3000
