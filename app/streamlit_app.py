@@ -7,7 +7,10 @@ from rag.answer import synthesize_answer
 from tools.readiness import ReadinessInputs, readiness_score
 from tools.timeline import TimelineInputs, build_timeline
 from datetime import date
-
+from tools.formatting import fmt_money, fmt_psf
+from tools.grants_prompt import build_grants_prompt
+from tools.eip_spr_prompt import build_eip_spr_prompt
+from tools.block_checklist import build_block_checklist
 
 st.set_page_config(page_title="SG HDB Resale Assistant", layout="wide")
 
@@ -89,29 +92,92 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("Grants")
-    st.write("Grant breakdown UI goes here.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        is_first_timer = st.checkbox("First-timer household?", value=True)
+        within_4km = st.selectbox(
+            "Within 4km of parents/children (for PHG)?",
+            ["Unknown", "Yes", "No"]
+        )
+        within_4km_bool = None if within_4km == "Unknown" else (within_4km == "Yes")
+    with col2:
+        st.caption("Using sidebar values for scheme/citizenship/income/flat type.")
+        st.write(f"- Scheme: **{scheme}**")
+        st.write(f"- Citizenship: **{citizenship}**")
+        st.write(f"- Household income: **${income:,.0f}**")
+        st.write(f"- Flat type: **{flat_type}**")
+
+    if st.button("Explain my grant options"):
+        # Compose the RAG question and ask the retriever/LLM
+        q = build_grants_prompt(
+            is_first_timer=is_first_timer,
+            scheme=scheme,
+            citizenship=citizenship,
+            household_income=int(income or 0),
+            flat_type=flat_type,
+            within_4km_of_parents=within_4km_bool
+        )
+        hits = retriever.search(q)
+        ans = synthesize_answer(q, hits)
+
+        # Render answer + sources
+        st.markdown(ans["answer_markdown"])
+        if ans.get("citations"):
+            st.caption("Sources:")
+            for i, c in enumerate(ans["citations"], 1):
+                st.markdown(f"- [{i}] {c['title']} — {c['url']}")
+
+    st.info(
+        "Grant amounts and eligibility change over time. Use this as guidance and confirm on the official HDB/CPF pages "
+        "before committing to a purchase or OTP."
+    )
 
 with tabs[2]:
     st.subheader("Price Fairness (Comps)")
-    mode = "block" if block.strip() else "town"
-    st.caption(f"Mode: {mode.upper()} (lookback: 12 months)")
+
+    # Mode switcher
+    comp_mode = st.radio(
+        "Compare by",
+        options=["Town", "Block"],
+        horizontal=True,
+        help="Use Town for broader view. Use Block for specific address if you filled Block above."
+    )
+    mode = "block" if (comp_mode == "Block" and block.strip()) else "town"
+    lookback = st.slider("Lookback (months)", 3, 24, 12, help="Window of past transactions to summarise.")
+
+    st.caption(f"Mode: **{mode.upper()}**, Flat type: **{flat_type}**, Lookback: **{lookback} months**")
+
     if st.button("Run Comps"):
-        out = sql_comps(mode=mode, town=town, block=block, flat_type=flat_type, lookback_months=12)
-        if not out or out["summary"]["deals"] == 0:
+        out = sql_comps(mode=mode, town=town, block=block, flat_type=flat_type, lookback_months=lookback)
+        s = out.get("summary", {}) or {}
+        if not s or s.get("deals", 0) == 0:
             st.warning("No transactions found for the chosen filters.")
         else:
-            s = out["summary"]
-            st.metric("Deals (12m)", s["deals"])
-            st.metric("Median Price", f"${s['median_price']:,.0f}")
-            st.metric("IQR (P25–P75)", f"${s['p25_price']:,.0f} – ${s['p75_price']:,.0f}")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Deals", int(s["deals"]))
+            with c2:
+                st.metric("Median Price", fmt_money(s["median_price"]))
+                st.caption(f"P25–P75: {fmt_money(s['p25_price'])} – {fmt_money(s['p75_price'])}")
+            with c3:
+                st.metric("Median PSF", fmt_psf(s["median_psf"]))
+                st.caption(f"P25–P75: {fmt_psf(s['p25_psf'])} – {fmt_psf(s['p75_psf'])}")
+            with c4:
+                st.metric("Avg Size (sqm)", f"{s['avg_sqm']:.1f}")
 
-            st.write("Recent transactions")
-            st.dataframe(pd.DataFrame(out["recent"]))
+            st.divider()
+            st.write("**Recent transactions**")
+            import pandas as pd
+            df = pd.DataFrame(out["recent"])
+            if not df.empty:
+                df = df.rename(columns={"psf": "psf_est"})
+                st.dataframe(df, use_container_width=True)
 
-            st.write("Monthly median series")
+            st.write("**Monthly medians**")
             series_df = pd.DataFrame(out["series"])
             if not series_df.empty:
-                series_df = series_df.set_index("month")[["median_price"]]
+                series_df = series_df.set_index("month")[["median_price","median_psf"]]
                 st.line_chart(series_df)
 
 with tabs[3]:
@@ -154,7 +220,49 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("Eligibility / EIP-SPR")
-    st.write("Live links to official checkers + explainer.")
+
+    # Inputs (reuse sidebar values for citizenship + flat_type + town/block)
+    ethnicity = st.selectbox("Your ethnicity (for EIP)", ["Chinese", "Malay", "Indian/Others"])
+    profile = citizenship  # reuse sidebar: "SC", "SC+SPR", "SPR"
+
+    # Gentle hint if user selects Block mode elsewhere but left Block empty
+    if (block.strip() == ""):
+        st.info("Tip: Enter a Block in the sidebar if you want block-specific notes; otherwise we’ll explain EIP/SPR at the town level.")
+
+    # 1) RAG explainer (concise, cited)
+    if st.button("Explain how EIP/SPR affects me"):
+        q = build_eip_spr_prompt(ethnicity=ethnicity, profile=profile, town=town, block=block if block.strip() else None)
+        hits = retriever.search(q)
+        ans = synthesize_answer(q, hits)
+        st.markdown(ans["answer_markdown"])
+        if ans.get("citations"):
+            st.caption("Sources:")
+            for i, c in enumerate(ans["citations"], 1):
+                st.markdown(f"- [{i}] {c['title']} — {c['url']}")
+    st.warning(
+    "Key timing risk: you submit Request for Value **after** OTP. If the HDB valuation is below your agreed price, "
+    "the difference (COV) must be paid in **cash**. Consider block-level comps before offering."
+    )
+    st.divider()
+
+    # 2) Quick official actions
+    st.caption("Go check on official sites (opens in new tab)")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.link_button("EIP/SPR Overview", "https://www.hdb.gov.sg/residential/living-in-an-hdb-flat/ethnic-integration-policy-and-spr-quota")
+    with c2:
+        # Public ‘checker’ is typically via Flat Portal; keep high-level link to avoid breakage.
+        st.link_button("Check EIP/SPR (Flat Portal)", "https://www.hdb.gov.sg/residential/buying-a-flat/resale")
+    with c3:
+        st.link_button("Check Resale Flat Prices", "https://www.hdb.gov.sg/residential/buying-a-flat/resale/price-check")
+
+    st.divider()
+
+    # 3) Copyable checklist for this town/block
+    st.write("**Block checklist** (copy & paste)")
+    checklist = build_block_checklist(town=town, block=block if block.strip() else None, flat_type=flat_type, today=date.today())
+    # st.code provides a copy-to-clipboard button automatically
+    st.code(checklist)
 
 with tabs[5]:
     st.subheader("Timeline")
