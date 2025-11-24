@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-python -m streamlit run app/streamlit_app.py
+python -m streamlit run streamlit_app.py
