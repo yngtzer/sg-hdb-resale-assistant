@@ -95,3 +95,4 @@ tzlocal==5.3.1
 url-normalize==2.2.1
 urllib3==2.5.0
 webencodings==0.5.1
+graphviz>=0.20.3
